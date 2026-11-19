@@ -11,7 +11,7 @@ Jason Taylor's fork of [warpdotdev/warp](https://github.com/warpdotdev/warp).
 ## Getting a build
 
 - Download the latest installer from this repo's **Releases** page, or
-- run **Actions -> Spayce Windows build -> Run workflow** to build the current code (takes 1-3 hours).
+- run **Actions -> Spayce Windows build -> Run workflow** to build the current code (takes 1-3 hours), or edit `.spayce-build` on master.
 
 The installer is unsigned: when Windows SmartScreen warns, click **More info -> Run anyway**.
 

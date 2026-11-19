@@ -1,8 +1,8 @@
 # spaycewarp: build the open-source Warp app for Windows x64 and publish the installer
 # as a GitHub Release in this fork.
 #
-# Run it from the Actions tab ("Spayce Windows build" -> Run workflow), or push a tag
-# starting with "spayce-v". Upstream Warp's own release workflows depend on Warp's private
+# Run it from the Actions tab ("Spayce Windows build" -> Run workflow), push a tag
+# starting with "spayce-v", or change the .spayce-build file on master. Upstream Warp's own release workflows depend on Warp's private
 # infrastructure, so this fork uses this self-contained workflow instead.
 #
 # The installer is unsigned, so Windows SmartScreen will warn on first run
@@ -20,6 +20,11 @@ on:
   push:
     tags:
       - "spayce-v*"
+    branches:
+      - master
+    paths:
+      - ".spayce-build"
+      - ".github/workflows/spayce_windows.yml"
 
 permissions:
   contents: write
@@ -105,7 +110,7 @@ jobs:
           retention-days: 14
 
       - name: Publish GitHub Release
-        if: github.ref_type == 'tag' || inputs.publish_release
+        if: github.event_name != 'workflow_dispatch' || inputs.publish_release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

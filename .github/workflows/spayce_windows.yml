@@ -1,0 +1,128 @@
+# spaycewarp: build the open-source Warp app for Windows x64 and publish the installer
+# as a GitHub Release in this fork.
+#
+# Run it from the Actions tab ("Spayce Windows build" -> Run workflow), or push a tag
+# starting with "spayce-v". Upstream Warp's own release workflows depend on Warp's private
+# infrastructure, so this fork uses this self-contained workflow instead.
+#
+# The installer is unsigned, so Windows SmartScreen will warn on first run
+# ("More info" -> "Run anyway").
+
+name: Spayce Windows build
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish the installer as a GitHub Release (otherwise only a workflow artifact)
+        type: boolean
+        default: true
+  push:
+    tags:
+      - "spayce-v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: spayce-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CHANNEL: oss
+
+jobs:
+  build_windows:
+    name: Build Windows x64 installer
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Version
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            TAG="${GITHUB_REF_NAME#spayce-}"
+          else
+            TAG="v0.$(date -u +%Y.%m.%d.%H%M).spayce"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "Building $TAG from ${GITHUB_SHA::7}"
+
+      - name: Free disk space
+        shell: pwsh
+        run: |
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name, @{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}}
+          # Big preinstalled toolchains we don't use. Ignore failures - this is best-effort.
+          foreach ($p in 'C:\Android', 'C:\hostedtoolcache\windows\go', 'C:\hostedtoolcache\windows\Ruby',
+                         'C:\hostedtoolcache\windows\PyPy', 'C:\Program Files\dotnet\sdk\*preview*') {
+            Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name, @{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}}
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: windows
+          cache_key: spayce-x64
+          is_self_hosted: false
+          install_release_deps: true
+
+      - name: Build warp-oss.exe
+        id: build_binary
+        shell: bash
+        run: script/bundle -Channel $CHANNEL -skip_build_installer --arch x64
+        env:
+          GIT_RELEASE_TAG: ${{ steps.version.outputs.tag }}
+
+      - name: Build installer
+        id: bundle_app
+        shell: bash
+        run: script/bundle -Channel $CHANNEL -skip_build_binary --arch x64
+        env:
+          GIT_RELEASE_TAG: ${{ steps.version.outputs.tag }}
+
+      - name: Rename installer
+        id: installer
+        shell: pwsh
+        run: |
+          $src = '${{ steps.bundle_app.outputs.installer_path }}'
+          $dest = Join-Path (Split-Path $src) 'spaycewarp-${{ steps.version.outputs.tag }}-windows-x64-setup.exe'
+          Copy-Item $src $dest
+          "path=$dest" >> $env:GITHUB_OUTPUT
+          "name=$(Split-Path $dest -Leaf)" >> $env:GITHUB_OUTPUT
+          Get-Item $dest | Format-Table Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: spaycewarp-windows-x64
+          path: ${{ steps.installer.outputs.path }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag' || inputs.publish_release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: spayce-${{ steps.version.outputs.tag }}
+        run: |
+          cat > notes.md <<EOF
+          spaycewarp build of upstream Warp \`${{ steps.version.outputs.sha }}\` for Windows x64.
+
+          **Install:** download \`${{ steps.installer.outputs.name }}\` below and run it.
+          It is unsigned, so Windows SmartScreen will warn: click **More info** -> **Run anyway**.
+          EOF
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
+            gh release create "$TAG" --target "$GITHUB_SHA" --prerelease \
+              --title "spaycewarp ${{ steps.version.outputs.tag }}" --notes-file notes.md \
+              "${{ steps.installer.outputs.path }}"
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --prerelease \
+              --title "spaycewarp ${{ steps.version.outputs.tag }}" --notes-file notes.md \
+              "${{ steps.installer.outputs.path }}"
+          fi
